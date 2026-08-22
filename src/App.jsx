@@ -1197,6 +1197,7 @@ function ImportApplicantsModal({ onImport, onClose, showToast, departments }) {
   const [mapping, setMapping] = useState({});
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
   const handleFile = (file) => {
@@ -1256,10 +1257,28 @@ function ImportApplicantsModal({ onImport, onClose, showToast, departments }) {
           </p>
           <div
             onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors"
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) {
+                if (!file.name.toLowerCase().endsWith(".csv")) {
+                  showToast("Please drop a .csv file.");
+                  return;
+                }
+                handleFile(file);
+              }
+            }}
+            className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
+              dragOver ? "border-indigo-400 bg-indigo-50" : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30"
+            }`}
           >
-            <Upload size={24} className="text-gray-400 mx-auto mb-2" />
-            <p className="text-sm text-gray-600">Click to choose a .csv file</p>
+            <Upload size={24} className={`mx-auto mb-2 ${dragOver ? "text-indigo-500" : "text-gray-400"}`} />
+            <p className="text-sm text-gray-600">
+              {dragOver ? "Drop your .csv file here" : "Drag and drop a .csv file here, or click to choose"}
+            </p>
             <input
               ref={fileInputRef} type="file" accept=".csv" className="hidden"
               onChange={(e) => { if (e.target.files[0]) handleFile(e.target.files[0]); }}
