@@ -456,7 +456,7 @@ function Sidebar({ view, setView, sidebarOpen, setSidebarOpen, userEmail }) {
   );
 }
 
-function TopBar({ setSidebarOpen, title, subtitle }) {
+function TopBar({ setSidebarOpen, title, subtitle, userEmail }) {
   return (
     <div className="h-16 border-b border-gray-100 bg-white/80 backdrop-blur sticky top-0 z-20 flex items-center justify-between px-4 md:px-8 gap-4">
       <div className="flex items-center gap-3 min-w-0">
@@ -484,7 +484,7 @@ function TopBar({ setSidebarOpen, title, subtitle }) {
           <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-indigo-600 rounded-full" />
         </button>
         <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-semibold">
-          AR
+          {initials(userEmail || "U")}
         </div>
       </div>
     </div>
@@ -736,12 +736,20 @@ function DashboardPage({ applicants, interviews, setView, openApplicant, userEma
   const todayStr = new Date().toISOString().slice(0, 10);
   const today = interviews.filter((i) => i.date === todayStr);
   const firstName = userEmail ? userEmail.split("@")[0] : "there";
+
+  const totalApplicants = applicants.length;
+  const shortlistedCount = applicants.filter((a) => ["Shortlisted", "Interview", "Selected"].includes(a.stage)).length;
+  const interviewedCount = applicants.filter((a) => ["Interview", "Selected"].includes(a.stage)).length;
+  const selectedCount = applicants.filter((a) => a.stage === "Selected").length;
+  const screenedCount = applicants.filter((a) => a.stage !== "New").length;
+  const funnelMax = Math.max(totalApplicants, 1);
+
   const funnel = [
-    { label: "Applied", value: 248, color: "bg-gray-400" },
-    { label: "Screened", value: 156, color: "bg-amber-500" },
-    { label: "Shortlisted", value: 64, color: "bg-blue-500" },
-    { label: "Interviewed", value: 38, color: "bg-violet-500" },
-    { label: "Selected", value: 21, color: "bg-emerald-500" },
+    { label: "Applied", value: totalApplicants, color: "bg-gray-400" },
+    { label: "Screened", value: screenedCount, color: "bg-amber-500" },
+    { label: "Shortlisted", value: shortlistedCount, color: "bg-blue-500" },
+    { label: "Interviewed", value: interviewedCount, color: "bg-violet-500" },
+    { label: "Selected", value: selectedCount, color: "bg-emerald-500" },
   ];
 
   return (
@@ -752,17 +760,17 @@ function DashboardPage({ applicants, interviews, setView, openApplicant, userEma
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard label="Total Applicants" value="248" delta="+12%" deltaLabel="vs last week" icon={Users} />
-        <KPICard label="Shortlisted" value="64" delta="+8%" deltaLabel="vs last week" icon={Filter} />
-        <KPICard label="Interviews Scheduled" value="38" delta="+15%" deltaLabel="vs last week" icon={CalendarIcon} />
-        <KPICard label="Selected" value="21" delta="+3" deltaLabel="this week" icon={CheckCircle2} />
+        <KPICard label="Total Applicants" value={String(totalApplicants)} icon={Users} />
+        <KPICard label="Shortlisted" value={String(shortlistedCount)} icon={Filter} />
+        <KPICard label="Interviews Scheduled" value={String(interviews.length)} icon={CalendarIcon} />
+        <KPICard label="Selected" value={String(selectedCount)} icon={CheckCircle2} />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl p-6">
           <h3 className="font-semibold text-gray-900 mb-5">Recruitment Funnel</h3>
           <div className="space-y-3">
-            {funnel.map((f) => <FunnelBar key={f.label} {...f} max={248} />)}
+            {funnel.map((f) => <FunnelBar key={f.label} {...f} max={funnelMax} />)}
           </div>
         </div>
 
@@ -1682,12 +1690,19 @@ function AnalyticsPage({ applicants }) {
     { name: "Meera", interviews: 12, avg: 8.8, pending: 2 },
     { name: "Dhruv", interviews: 9, avg: 7.9, pending: 1 },
   ];
+  const totalApplicants = applicants.length;
+  const shortlistedCount = applicants.filter((a) => ["Shortlisted", "Interview", "Selected"].includes(a.stage)).length;
+  const interviewedCount = applicants.filter((a) => ["Interview", "Selected"].includes(a.stage)).length;
+  const selectedCount = applicants.filter((a) => a.stage === "Selected").length;
+  const screenedCount = applicants.filter((a) => a.stage !== "New").length;
+  const funnelMax = Math.max(totalApplicants, 1);
+  const pct = (n) => (totalApplicants ? Math.round((n / totalApplicants) * 100) : 0);
   const funnel = [
-    { label: "Applied", value: 248, color: "bg-gray-400" },
-    { label: "Screened", value: 156, color: "bg-amber-500" },
-    { label: "Shortlisted", value: 64, color: "bg-blue-500" },
-    { label: "Interviewed", value: 38, color: "bg-violet-500" },
-    { label: "Selected", value: 21, color: "bg-emerald-500" },
+    { label: "Applied", value: totalApplicants, color: "bg-gray-400" },
+    { label: "Screened", value: screenedCount, color: "bg-amber-500" },
+    { label: "Shortlisted", value: shortlistedCount, color: "bg-blue-500" },
+    { label: "Interviewed", value: interviewedCount, color: "bg-violet-500" },
+    { label: "Selected", value: selectedCount, color: "bg-emerald-500" },
   ];
 
   return (
@@ -1703,10 +1718,10 @@ function AnalyticsPage({ applicants }) {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard label="Applications" value="248" delta="+12%" deltaLabel="cycle over cycle" icon={Users} />
-        <KPICard label="Shortlist Rate" value="26%" delta="+3pt" deltaLabel="cycle over cycle" icon={Filter} />
-        <KPICard label="Interview Attendance" value="59%" delta="-4pt" deltaLabel="cycle over cycle" icon={CalendarIcon} positive={false} />
-        <KPICard label="Selection Rate" value="33%" delta="+6pt" deltaLabel="cycle over cycle" icon={CheckCircle2} />
+        <KPICard label="Applications" value={String(totalApplicants)} icon={Users} />
+        <KPICard label="Shortlist Rate" value={`${pct(shortlistedCount)}%`} icon={Filter} />
+        <KPICard label="Interview Rate" value={`${pct(interviewedCount)}%`} icon={CalendarIcon} />
+        <KPICard label="Selection Rate" value={`${pct(selectedCount)}%`} icon={CheckCircle2} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-5">
@@ -1766,7 +1781,7 @@ function AnalyticsPage({ applicants }) {
       <div className="bg-white border border-gray-200 rounded-2xl p-6">
         <h3 className="font-semibold text-gray-900 mb-4">Recruitment Funnel</h3>
         <div className="space-y-3">
-          {funnel.map((f) => <FunnelBar key={f.label} {...f} max={248} />)}
+          {funnel.map((f) => <FunnelBar key={f.label} {...f} max={funnelMax} />)}
         </div>
       </div>
 
@@ -2021,7 +2036,7 @@ export default function App() {
     <div className="min-h-screen bg-gray-50 flex" style={{ fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
       <Sidebar view={view} setView={setView} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} userEmail={session?.user?.email} />
       <div className="flex-1 min-w-0 flex flex-col">
-        <TopBar setSidebarOpen={setSidebarOpen} title={titleText} subtitle={subtitleText} />
+        <TopBar setSidebarOpen={setSidebarOpen} title={titleText} subtitle={subtitleText} userEmail={session?.user?.email} />
         <main className="flex-1 overflow-y-auto">
           {dataLoading && applicants.length === 0 && (
             <div className="p-8 text-sm text-gray-400">Loading your workspace data...</div>
