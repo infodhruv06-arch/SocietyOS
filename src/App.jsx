@@ -11,6 +11,7 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { supabase } from "./supabaseClient";
 
 /* ============================================================
    MOCK DATA
@@ -18,12 +19,71 @@ import {
 
 const DEPARTMENTS = ["Marketing", "Finance", "Events", "Operations", "Content"];
 
+// Fixed UUIDs so interviewer_id columns (uuid type) have stable values
+// without needing a separate interviewers table yet.
 const INTERVIEWERS = [
-  { id: "int1", name: "Ananya Reddy", email: "ananya.reddy@societyos.club" },
-  { id: "int2", name: "Kabir Malhotra", email: "kabir.malhotra@societyos.club" },
-  { id: "int3", name: "Meera Nair", email: "meera.nair@societyos.club" },
-  { id: "int4", name: "Dhruv Kapoor", email: "dhruv.kapoor@societyos.club" },
+  { id: "11111111-1111-1111-1111-111111111111", name: "Ananya Reddy", email: "ananya.reddy@societyos.club" },
+  { id: "22222222-2222-2222-2222-222222222222", name: "Kabir Malhotra", email: "kabir.malhotra@societyos.club" },
+  { id: "33333333-3333-3333-3333-333333333333", name: "Meera Nair", email: "meera.nair@societyos.club" },
+  { id: "44444444-4444-4444-4444-444444444444", name: "Dhruv Kapoor", email: "dhruv.kapoor@societyos.club" },
 ];
+
+/* ============================================================
+   DB <-> APP DATA MAPPING
+   These convert between Supabase's snake_case columns and the
+   camelCase shape the rest of this app already expects, so the
+   UI components below don't need to change.
+   ============================================================ */
+
+function dbRowToApplicant(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    college: row.college,
+    course: row.course,
+    year: row.year,
+    department: row.department,
+    role: row.department,
+    stage: row.stage,
+    score: Number(row.score) || 0,
+    applicationDate: row.application_date,
+    resumeUrl: row.resume_url,
+    applicationAnswers: row.application_answers || [],
+    interviewerId: row.interviewer_id,
+  };
+}
+
+function dbRowToInterview(row) {
+  return {
+    id: row.id,
+    applicantId: row.applicant_id,
+    interviewerId: row.interviewer_id,
+    date: row.date,
+    time: row.time,
+    duration: row.duration,
+    type: row.type,
+    status: row.status,
+    meetingLink: row.meeting_link,
+  };
+}
+
+function dbRowToEvaluation(row) {
+  return {
+    id: row.id,
+    applicantId: row.applicant_id,
+    interviewerId: row.interviewer_id,
+    communication: row.communication,
+    problemSolving: row.problem_solving,
+    creativity: row.creativity,
+    domainKnowledge: row.domain_knowledge,
+    cultureFit: row.culture_fit,
+    overallScore: Number(row.overall_score) || 0,
+    recommendation: row.recommendation,
+    comments: row.comments,
+  };
+}
 
 const STAGES = ["New", "Screening", "Shortlisted", "Interview", "Selected", "Rejected"];
 
@@ -175,7 +235,9 @@ const RECENT_ACTIVITY = [
    ============================================================ */
 
 function initials(name) {
-  return name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase();
+  const parts = name.split(" ").filter(Boolean);
+  if (parts.length > 1) return parts.map((p) => p[0]).slice(0, 2).join("").toUpperCase();
+  return (name.replace(/[^a-zA-Z]/g, "").slice(0, 2) || "U").toUpperCase();
 }
 
 const AVATAR_COLORS = ["bg-indigo-100 text-indigo-700", "bg-violet-100 text-violet-700", "bg-blue-100 text-blue-700", "bg-emerald-100 text-emerald-700", "bg-amber-100 text-amber-700", "bg-rose-100 text-rose-700"];
@@ -329,7 +391,7 @@ const NAV_ITEMS = [
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
-function Sidebar({ view, setView, sidebarOpen, setSidebarOpen, role, setRole }) {
+function Sidebar({ view, setView, sidebarOpen, setSidebarOpen, userEmail }) {
   return (
     <>
       {sidebarOpen && (
@@ -375,16 +437,19 @@ function Sidebar({ view, setView, sidebarOpen, setSidebarOpen, role, setRole }) 
         </nav>
 
         <div className="p-3 border-t border-gray-100">
-          <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-gray-50">
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="w-full flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-gray-50 text-left"
+          >
             <div className="w-9 h-9 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-semibold shrink-0">
-              AR
+              {initials(userEmail || "U")}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-gray-900 truncate">Aryan Sharma</div>
-              <div className="text-xs text-gray-500 truncate">Recruitment Head</div>
+              <div className="text-sm font-medium text-gray-900 truncate">{userEmail || "Account"}</div>
+              <div className="text-xs text-gray-500 truncate">Click to log out</div>
             </div>
             <LogOut size={15} className="text-gray-400" />
-          </div>
+          </button>
         </div>
       </aside>
     </>
@@ -554,38 +619,94 @@ function LandingPage({ onDemo }) {
    LOGIN PAGE
    ============================================================ */
 
-function LoginPage({ onLogin }) {
+function LoginPage() {
+  const [mode, setMode] = useState("login"); // login | signup
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setInfo("");
+    setLoading(true);
+    try {
+      if (mode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        // onAuthStateChange in App() picks up the session automatically.
+      } else {
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setInfo("Account created. Check your email to confirm, then log in.");
+        setMode("login");
+      }
+    } catch (err) {
+      setError(err.message || "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setError("");
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) setError(error.message);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="flex justify-center mb-8"><Logo /></div>
         <div className="bg-white border border-gray-200 rounded-2xl p-7 shadow-sm">
-          <h1 className="text-lg font-semibold text-gray-900 mb-1">Welcome back</h1>
-          <p className="text-sm text-gray-500 mb-6">Log in to your recruitment workspace.</p>
-          <form onSubmit={(e) => { e.preventDefault(); onLogin(); }}>
+          <h1 className="text-lg font-semibold text-gray-900 mb-1">
+            {mode === "login" ? "Welcome back" : "Create your account"}
+          </h1>
+          <p className="text-sm text-gray-500 mb-6">
+            {mode === "login" ? "Log in to your recruitment workspace." : "Set up a new SocietyOS workspace login."}
+          </p>
+
+          {error && (
+            <div className="bg-red-50 text-red-700 text-sm rounded-lg px-3 py-2 mb-4">{error}</div>
+          )}
+          {info && (
+            <div className="bg-emerald-50 text-emerald-700 text-sm rounded-lg px-3 py-2 mb-4">{info}</div>
+          )}
+
+          <form onSubmit={handleSubmit}>
             <Field label="Email">
-              <input type="email" className={inputClass} placeholder="you@college.edu" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <input type="email" required className={inputClass} placeholder="you@college.edu" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
             <Field label="Password">
-              <input type="password" className={inputClass} placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <input type="password" required minLength={6} className={inputClass} placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
-            <button type="submit" className="w-full bg-indigo-600 text-white text-sm font-medium py-2.5 rounded-lg hover:bg-indigo-700 transition-colors">
-              Log in
+            <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white text-sm font-medium py-2.5 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-60">
+              {loading ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}
             </button>
           </form>
+
           <div className="flex items-center gap-3 my-5">
             <div className="h-px bg-gray-200 flex-1" />
             <span className="text-xs text-gray-400">or</span>
             <div className="h-px bg-gray-200 flex-1" />
           </div>
-          <button onClick={onLogin} className="w-full border border-gray-200 text-sm font-medium py-2.5 rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2 text-gray-700">
+
+          <button onClick={handleGoogle} className="w-full border border-gray-200 text-sm font-medium py-2.5 rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2 text-gray-700">
             <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
             Continue with Google
           </button>
+
           <p className="text-center text-sm text-gray-500 mt-6">
-            Don't have an account? <button onClick={onLogin} className="text-indigo-600 font-medium hover:underline">Create one</button>
+            {mode === "login" ? (
+              <>Don't have an account? <button type="button" onClick={() => { setMode("signup"); setError(""); setInfo(""); }} className="text-indigo-600 font-medium hover:underline">Create one</button></>
+            ) : (
+              <>Already have an account? <button type="button" onClick={() => { setMode("login"); setError(""); setInfo(""); }} className="text-indigo-600 font-medium hover:underline">Log in</button></>
+            )}
           </p>
         </div>
       </div>
@@ -611,8 +732,10 @@ function FunnelBar({ label, value, max, color }) {
   );
 }
 
-function DashboardPage({ applicants, interviews, setView, openApplicant }) {
-  const today = INITIAL_INTERVIEWS.filter((i) => i.date === "2026-08-21");
+function DashboardPage({ applicants, interviews, setView, openApplicant, userEmail }) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const today = interviews.filter((i) => i.date === todayStr);
+  const firstName = userEmail ? userEmail.split("@")[0] : "there";
   const funnel = [
     { label: "Applied", value: 248, color: "bg-gray-400" },
     { label: "Screened", value: 156, color: "bg-amber-500" },
@@ -624,7 +747,7 @@ function DashboardPage({ applicants, interviews, setView, openApplicant }) {
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">Good morning, Aryan</h1>
+        <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">Good morning, {firstName}</h1>
         <p className="text-gray-500 text-sm mt-1">Here's what's happening with your recruitment.</p>
       </div>
 
@@ -1751,12 +1874,15 @@ function SettingsPage({ showToast }) {
 
 export default function App() {
   const [stage, setStage] = useState("landing"); // landing | login | app
+  const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [view, setView] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [applicants, setApplicants] = useState(INITIAL_APPLICANTS);
-  const [interviews, setInterviews] = useState(INITIAL_INTERVIEWS);
-  const [evaluations, setEvaluations] = useState(INITIAL_EVALUATIONS);
-  const [selectedApplicantId, setSelectedApplicantId] = useState("a1");
+  const [applicants, setApplicants] = useState([]);
+  const [interviews, setInterviews] = useState([]);
+  const [evaluations, setEvaluations] = useState([]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [selectedApplicantId, setSelectedApplicantId] = useState(null);
   const [toasts, setToasts] = useState([]);
 
   const showToast = (message) => {
@@ -1765,32 +1891,116 @@ export default function App() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
   };
 
+  // Check for an existing session on load, and listen for login/logout events
+  // (this is what makes "Continue with Google" redirect back in already signed-in).
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthChecked(true);
+      if (data.session) setStage("app");
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (newSession) setStage("app");
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // Once logged in, load real data from the database.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    setDataLoading(true);
+    (async () => {
+      const [applicantsRes, interviewsRes, evaluationsRes] = await Promise.all([
+        supabase.from("applicants").select("*").order("created_at", { ascending: false }),
+        supabase.from("interviews").select("*"),
+        supabase.from("evaluations").select("*"),
+      ]);
+      if (cancelled) return;
+      if (applicantsRes.error) showToast("Could not load applicants: " + applicantsRes.error.message);
+      else setApplicants(applicantsRes.data.map(dbRowToApplicant));
+      if (interviewsRes.error) showToast("Could not load interviews: " + interviewsRes.error.message);
+      else setInterviews(interviewsRes.data.map(dbRowToInterview));
+      if (evaluationsRes.error) showToast("Could not load evaluations: " + evaluationsRes.error.message);
+      else setEvaluations(evaluationsRes.data.map(dbRowToEvaluation));
+      setDataLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
   const openApplicant = (id) => { setSelectedApplicantId(id); setView("applicant-detail"); };
   const goToEvaluation = (id) => { setSelectedApplicantId(id); setView("evaluation"); };
   const goToSchedule = (id) => { setSelectedApplicantId(id); setView("scheduler"); };
 
-  const setApplicantStage = (id, newStage) => {
-    setApplicants((prev) => prev.map((a) => (a.id === id ? { ...a, stage: newStage } : a)));
+  const setApplicantStage = async (id, newStage) => {
+    setApplicants((prev) => prev.map((a) => (a.id === id ? { ...a, stage: newStage } : a))); // optimistic
+    const { error } = await supabase.from("applicants").update({ stage: newStage }).eq("id", id);
+    if (error) showToast("Failed to save stage change: " + error.message);
   };
 
-  const addApplicant = ({ name, college, department }) => {
-    const newApp = makeApplicant(`a${Date.now()}`, name, college, "B.A. (Hons.)", "1st Year", department, "New", 0, "Aug 21", null, `${name.split(" ")[0].toLowerCase()}@college.edu`, "+91 90000 00000");
-    setApplicants((prev) => [newApp, ...prev]);
+  const addApplicant = async ({ name, college, department }) => {
+    const email = `${name.split(" ")[0].toLowerCase()}@college.edu`;
+    const { data, error } = await supabase
+      .from("applicants")
+      .insert({
+        name, college, department, course: "B.A. (Hons.)", year: "1st Year",
+        stage: "New", score: 0, email, phone: "+91 90000 00000",
+        application_answers: [],
+        created_by: session?.user?.id || null,
+      })
+      .select()
+      .single();
+    if (error) { showToast("Failed to add applicant: " + error.message); return; }
+    setApplicants((prev) => [dbRowToApplicant(data), ...prev]);
   };
 
-  const addInterview = (data) => setInterviews((prev) => [...prev, data]);
-
-  const submitEvaluation = (applicantId, data) => {
-    setEvaluations((prev) => {
-      const existing = prev.find((e) => e.applicantId === applicantId);
-      const record = { id: existing?.id || `ev${Date.now()}`, applicantId, interviewerId: "int1", ...data };
-      return existing ? prev.map((e) => (e.applicantId === applicantId ? record : e)) : [...prev, record];
-    });
-    setApplicants((prev) => prev.map((a) => (a.id === applicantId ? { ...a, score: data.overallScore } : a)));
+  const addInterview = async (form) => {
+    const { data, error } = await supabase
+      .from("interviews")
+      .insert({
+        applicant_id: form.applicantId, interviewer_id: form.interviewerId,
+        date: form.date, time: form.time, duration: form.duration,
+        type: form.type, status: form.status, meeting_link: form.meetingLink,
+        created_by: session?.user?.id || null,
+      })
+      .select()
+      .single();
+    if (error) { showToast("Failed to schedule interview: " + error.message); return; }
+    setInterviews((prev) => [...prev, dbRowToInterview(data)]);
   };
 
-  if (stage === "landing") return <LandingPage onDemo={() => setStage("login")} />;
-  if (stage === "login") return <LoginPage onLogin={() => { setStage("app"); setView("dashboard"); }} />;
+  const submitEvaluation = async (applicantId, formData) => {
+    const existing = evaluations.find((e) => e.applicantId === applicantId);
+    const row = {
+      applicant_id: applicantId,
+      interviewer_id: existing?.interviewerId || INTERVIEWERS[0].id,
+      communication: formData.communication, problem_solving: formData.problemSolving,
+      creativity: formData.creativity, domain_knowledge: formData.domainKnowledge,
+      culture_fit: formData.cultureFit, overall_score: formData.overallScore,
+      recommendation: formData.recommendation, comments: formData.comments,
+      created_by: session?.user?.id || null,
+    };
+    const query = existing
+      ? supabase.from("evaluations").update(row).eq("id", existing.id).select().single()
+      : supabase.from("evaluations").insert(row).select().single();
+    const { data, error } = await query;
+    if (error) { showToast("Failed to submit evaluation: " + error.message); return; }
+    setEvaluations((prev) => existing ? prev.map((e) => (e.applicantId === applicantId ? dbRowToEvaluation(data) : e)) : [...prev, dbRowToEvaluation(data)]);
+    await supabase.from("applicants").update({ score: formData.overallScore }).eq("id", applicantId);
+    setApplicants((prev) => prev.map((a) => (a.id === applicantId ? { ...a, score: formData.overallScore } : a)));
+  };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-sm text-gray-400">Loading SocietyOS...</div>
+      </div>
+    );
+  }
+
+  if (!session && stage === "landing") return <LandingPage onDemo={() => setStage("login")} />;
+  if (!session) return <LoginPage />;
 
   const selectedApplicant = applicants.find((a) => a.id === selectedApplicantId);
 
@@ -1809,12 +2019,15 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex" style={{ fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }}>
-      <Sidebar view={view} setView={setView} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
+      <Sidebar view={view} setView={setView} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} userEmail={session?.user?.email} />
       <div className="flex-1 min-w-0 flex flex-col">
         <TopBar setSidebarOpen={setSidebarOpen} title={titleText} subtitle={subtitleText} />
         <main className="flex-1 overflow-y-auto">
+          {dataLoading && applicants.length === 0 && (
+            <div className="p-8 text-sm text-gray-400">Loading your workspace data...</div>
+          )}
           {view === "dashboard" && (
-            <DashboardPage applicants={applicants} interviews={interviews} setView={setView} openApplicant={openApplicant} />
+            <DashboardPage applicants={applicants} interviews={interviews} setView={setView} openApplicant={openApplicant} userEmail={session?.user?.email} />
           )}
           {view === "applicants" && (
             <ApplicantsPage applicants={applicants} openApplicant={openApplicant} showToast={showToast} addApplicant={addApplicant} />
