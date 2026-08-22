@@ -1067,13 +1067,13 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bu
             onClick={() => { downloadCSV(filtered); showToast(`Exported ${filtered.length} applicants to CSV`); }}
             className="flex items-center gap-1.5 text-sm font-medium text-gray-700 border border-gray-200 px-3.5 py-2 rounded-lg hover:bg-gray-50"
           >
-            <Download size={15} /> Export
+            <Upload size={15} /> Export
           </button>
           <button
             onClick={() => setShowImport(true)}
             className="flex items-center gap-1.5 text-sm font-medium text-gray-700 border border-gray-200 px-3.5 py-2 rounded-lg hover:bg-gray-50"
           >
-            <Upload size={15} /> Import CSV
+            <Download size={15} /> Import CSV
           </button>
           <button onClick={() => setShowAdd(true)} className="flex items-center gap-1.5 text-sm font-medium text-white bg-indigo-600 px-3.5 py-2 rounded-lg hover:bg-indigo-700">
             <Plus size={15} /> Add Applicant
