@@ -5,7 +5,7 @@ import {
   Clock, Mail, Phone, GraduationCap, FileText, ArrowLeft, MoreHorizontal,
   TrendingUp, TrendingDown, ChevronLeft, ChevronRight, Menu, LogOut, Video,
   ExternalLink, AlertCircle, CheckCircle2, Circle, Sparkles, MapPin,
-  ChevronDown, ArrowRight, PlayCircle, Building2, User as UserIcon, Trash2,
+  ChevronDown, ArrowRight, PlayCircle, Building2, User as UserIcon, Trash2, Upload,
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -17,7 +17,7 @@ import { supabase } from "./supabaseClient";
    MOCK DATA
    ============================================================ */
 
-const DEPARTMENTS = ["Marketing", "Finance", "Events", "Operations", "Content"];
+const DEFAULT_DEPARTMENTS = ["Marketing", "Finance", "Events", "Operations", "Content"];
 
 // Fixed UUIDs so interviewer_id columns (uuid type) have stable values
 // without needing a separate interviewers table yet.
@@ -35,6 +35,14 @@ const INTERVIEWERS = [
    UI components below don't need to change.
    ============================================================ */
 
+function dbRowToSociety(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    departments: Array.isArray(row.departments) ? row.departments : DEFAULT_DEPARTMENTS,
+  };
+}
+
 function dbRowToApplicant(row) {
   return {
     id: row.id,
@@ -45,6 +53,8 @@ function dbRowToApplicant(row) {
     course: row.course,
     year: row.year,
     department: row.department,
+    preference2: row.preference_2 || null,
+    preference3: row.preference_3 || null,
     role: row.department,
     stage: row.stage,
     score: Number(row.score) || 0,
@@ -260,6 +270,65 @@ function downloadCSV(applicants) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// Lightweight CSV parser (handles quoted fields with commas/newlines) --
+// used for importing Google Form response exports without adding a dependency.
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (inQuotes) {
+      if (char === '"' && next === '"') { field += '"'; i++; }
+      else if (char === '"') { inQuotes = false; }
+      else { field += char; }
+    } else {
+      if (char === '"') inQuotes = true;
+      else if (char === ",") { row.push(field); field = ""; }
+      else if (char === "\n" || char === "\r") {
+        if (char === "\r" && next === "\n") i++;
+        row.push(field); field = "";
+        if (row.some((c) => c.trim() !== "")) rows.push(row);
+        row = [];
+      } else field += char;
+    }
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  if (rows.length === 0) return { headers: [], records: [] };
+  const headers = rows[0].map((h) => h.trim());
+  const records = rows.slice(1).map((r) => {
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = (r[i] || "").trim(); });
+    return obj;
+  });
+  return { headers, records };
+}
+
+// Best-guess column mapping so most Google Form exports "just work"
+// without the user having to manually map every field.
+function guessColumnMap(headers) {
+  const find = (keywords) => headers.find((h) => keywords.some((k) => h.toLowerCase().includes(k))) || "";
+  return {
+    name: find(["name", "full name"]),
+    email: find(["email", "e-mail"]),
+    phone: find(["phone", "mobile", "contact number"]),
+    college: find(["college", "institution", "university"]),
+    course: find(["course", "degree", "program"]),
+    year: find(["year"]),
+    preference1: find(["1st preference", "first preference", "preference 1", "department"]),
+    preference2: find(["2nd preference", "second preference", "preference 2"]),
+    preference3: find(["3rd preference", "third preference", "preference 3"]),
+  };
+}
+
+function normalizeDeptValue(value, departments) {
+  if (!value) return "";
+  const match = (departments || DEFAULT_DEPARTMENTS).find((d) => d.toLowerCase() === value.trim().toLowerCase());
+  return match || value.trim();
 }
 
 /* ============================================================
@@ -619,6 +688,76 @@ function LandingPage({ onDemo }) {
    LOGIN PAGE
    ============================================================ */
 
+function SocietyOnboarding({ onCreate, userEmail }) {
+  const [name, setName] = useState("");
+  const [departments, setDepartments] = useState(["Marketing", "Finance", "Events"]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const updateDept = (i, value) => setDepartments((prev) => prev.map((d, idx) => (idx === i ? value : d)));
+  const removeDept = (i) => setDepartments((prev) => prev.filter((_, idx) => idx !== i));
+  const addDept = () => setDepartments((prev) => [...prev, ""]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    const cleanDepts = departments.map((d) => d.trim()).filter(Boolean);
+    if (!name.trim()) { setError("Please enter your society's name."); return; }
+    if (cleanDepts.length === 0) { setError("Add at least one department."); return; }
+    setSaving(true);
+    await onCreate({ name: name.trim(), departments: cleanDepts });
+    setSaving(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-10">
+      <div className="w-full max-w-lg">
+        <div className="flex justify-center mb-8"><Logo /></div>
+        <div className="bg-white border border-gray-200 rounded-2xl p-7 shadow-sm">
+          <h1 className="text-lg font-semibold text-gray-900 mb-1">Set up your society</h1>
+          <p className="text-sm text-gray-500 mb-6">
+            Signed in as {userEmail}. Tell us about your society so we can tailor SocietyOS to it.
+          </p>
+
+          {error && <div className="bg-red-50 text-red-700 text-sm rounded-lg px-3 py-2 mb-4">{error}</div>}
+
+          <form onSubmit={handleSubmit}>
+            <Field label="Society name">
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. SRCC Consulting Club" required />
+            </Field>
+
+            <label className="block mb-4">
+              <span className="block text-sm font-medium text-gray-700 mb-1.5">Departments you recruit for</span>
+              <div className="space-y-2">
+                {departments.map((d, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      className={inputClass}
+                      value={d}
+                      onChange={(e) => updateDept(i, e.target.value)}
+                      placeholder={`Department ${i + 1}`}
+                    />
+                    <button type="button" onClick={() => removeDept(i)} className="text-gray-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 shrink-0" aria-label="Remove department">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={addDept} className="mt-2 text-sm font-medium text-indigo-600 hover:text-indigo-700 flex items-center gap-1">
+                <Plus size={14} /> Add another department
+              </button>
+            </label>
+
+            <button type="submit" disabled={saving} className="w-full bg-indigo-600 text-white text-sm font-medium py-2.5 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-60 mt-2">
+              {saving ? "Setting up..." : "Create my society workspace"}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoginPage() {
   const [mode, setMode] = useState("login"); // login | signup
   const [email, setEmail] = useState("");
@@ -884,16 +1023,24 @@ function formatTime(t) {
   return `${h12}:${String(m).padStart(2, "0")} ${period}`;
 }
 
+function formatDateDisplay(dateStr) {
+  if (!dateStr) return "—";
+  const [year, month, day] = dateStr.split("-").map(Number);
+  if (!year || !month || !day) return dateStr;
+  return new Date(year, month - 1, day).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 /* ============================================================
    APPLICANTS PAGE
    ============================================================ */
 
-function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant }) {
+function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bulkImportApplicants, departments }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("All");
   const [deptFilter, setDeptFilter] = useState("All");
   const [page, setPage] = useState(1);
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const perPage = 10;
 
   const filtered = useMemo(() => {
@@ -922,6 +1069,12 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant }) 
           >
             <Download size={15} /> Export
           </button>
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-1.5 text-sm font-medium text-gray-700 border border-gray-200 px-3.5 py-2 rounded-lg hover:bg-gray-50"
+          >
+            <Upload size={15} /> Import CSV
+          </button>
           <button onClick={() => setShowAdd(true)} className="flex items-center gap-1.5 text-sm font-medium text-white bg-indigo-600 px-3.5 py-2 rounded-lg hover:bg-indigo-700">
             <Plus size={15} /> Add Applicant
           </button>
@@ -944,7 +1097,7 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant }) 
         </select>
         <select value={deptFilter} onChange={(e) => { setDeptFilter(e.target.value); setPage(1); }} className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option value="All">All departments</option>
-          {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+          {departments.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
         <span className="text-xs text-gray-400 ml-auto">{filtered.length} results</span>
       </div>
@@ -988,7 +1141,7 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant }) 
                     <td className="px-5 py-3"><StatusBadge stage={a.stage} /></td>
                     <td className="px-5 py-3 font-medium text-gray-900 tabular-nums">{a.score.toFixed(1)}</td>
                     <td className="px-5 py-3 text-gray-500 hidden lg:table-cell">{interviewer ? interviewer.name.split(" ")[0] : "—"}</td>
-                    <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{a.applicationDate}</td>
+                    <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{formatDateDisplay(a.applicationDate)}</td>
                     <td className="px-5 py-3 text-right">
                       <MoreHorizontal size={16} className="text-gray-300" />
                     </td>
@@ -1013,22 +1166,177 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant }) 
 
       <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Add Applicant">
         <AddApplicantForm
+          departments={departments}
           onSubmit={(data) => { addApplicant(data); setShowAdd(false); showToast(`${data.name} added to Applicants`); }}
+        />
+      </Modal>
+
+      <Modal open={showImport} onClose={() => setShowImport(false)} title="Import from CSV" wide>
+        <ImportApplicantsModal
+          departments={departments}
+          onImport={bulkImportApplicants}
+          onClose={() => setShowImport(false)}
+          showToast={showToast}
         />
       </Modal>
     </div>
   );
 }
 
-function AddApplicantForm({ onSubmit }) {
+const FIELD_LABELS = {
+  name: "Full name *", email: "Email", phone: "Phone", college: "College",
+  course: "Course", year: "Year", preference1: "1st preference *",
+  preference2: "2nd preference", preference3: "3rd preference",
+};
+const REQUIRED_IMPORT_FIELDS = ["name", "preference1"];
+
+function ImportApplicantsModal({ onImport, onClose, showToast, departments }) {
+  const [step, setStep] = useState("upload"); // upload | map | result
+  const [headers, setHeaders] = useState([]);
+  const [records, setRecords] = useState([]);
+  const [mapping, setMapping] = useState({});
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const { headers: h, records: r } = parseCSV(String(reader.result));
+      if (h.length === 0 || r.length === 0) {
+        showToast("Could not read any rows from that file.");
+        return;
+      }
+      setHeaders(h);
+      setRecords(r);
+      setMapping(guessColumnMap(h));
+      setStep("map");
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImport = async () => {
+    const missingRequired = REQUIRED_IMPORT_FIELDS.filter((f) => !mapping[f]);
+    if (missingRequired.length) {
+      showToast(`Please map: ${missingRequired.map((f) => FIELD_LABELS[f]).join(", ")}`);
+      return;
+    }
+    setImporting(true);
+    const rows = records
+      .map((r) => ({
+        name: (r[mapping.name] || "").trim(),
+        email: mapping.email ? r[mapping.email] : "",
+        phone: mapping.phone ? r[mapping.phone] : "",
+        college: mapping.college ? r[mapping.college] : "",
+        course: mapping.course ? r[mapping.course] : "",
+        year: mapping.year ? r[mapping.year] : "",
+        department: normalizeDeptValue(r[mapping.preference1], departments),
+        preference2: mapping.preference2 ? normalizeDeptValue(r[mapping.preference2], departments) : "",
+        preference3: mapping.preference3 ? normalizeDeptValue(r[mapping.preference3], departments) : "",
+      }))
+      .filter((r) => r.name && r.department);
+    const skipped = records.length - rows.length;
+    if (rows.length === 0) {
+      showToast("No valid rows to import — check your column mapping.");
+      setImporting(false);
+      return;
+    }
+    const res = await onImport(rows);
+    setImporting(false);
+    setResult({ success: res.success || 0, skipped, error: res.error });
+    setStep("result");
+  };
+
+  return (
+    <div>
+      {step === "upload" && (
+        <div>
+          <p className="text-sm text-gray-600 mb-4">
+            Upload a CSV export of your Google Form responses (in Google Sheets: File → Download → Comma Separated Values).
+          </p>
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors"
+          >
+            <Upload size={24} className="text-gray-400 mx-auto mb-2" />
+            <p className="text-sm text-gray-600">Click to choose a .csv file</p>
+            <input
+              ref={fileInputRef} type="file" accept=".csv" className="hidden"
+              onChange={(e) => { if (e.target.files[0]) handleFile(e.target.files[0]); }}
+            />
+          </div>
+        </div>
+      )}
+
+      {step === "map" && (
+        <div>
+          <p className="text-sm text-gray-600 mb-4">
+            Found <span className="font-semibold text-gray-900">{records.length}</span> rows. Match each field to a column from your file — we've guessed where we could.
+          </p>
+          <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+            {Object.keys(FIELD_LABELS).map((field) => (
+              <div key={field} className="flex items-center gap-3">
+                <span className="text-sm text-gray-600 w-36 shrink-0">{FIELD_LABELS[field]}</span>
+                <select
+                  className={inputClass}
+                  value={mapping[field] || ""}
+                  onChange={(e) => setMapping((m) => ({ ...m, [field]: e.target.value }))}
+                >
+                  <option value="">Not in file</option>
+                  {headers.map((h) => <option key={h} value={h}>{h}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2 justify-end mt-5">
+            <button onClick={() => setStep("upload")} className="text-sm font-medium text-gray-600 px-4 py-2 rounded-lg hover:bg-gray-50">Back</button>
+            <button
+              onClick={handleImport}
+              disabled={importing}
+              className="text-sm font-medium text-white bg-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-60"
+            >
+              {importing ? "Importing..." : `Import ${records.length} rows`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === "result" && result && (
+        <div className="text-center py-6">
+          <CheckCircle2 size={36} className="text-emerald-500 mx-auto mb-3" />
+          <p className="font-medium text-gray-900">{result.success} applicants imported.</p>
+          {result.skipped > 0 && (
+            <p className="text-sm text-gray-500 mt-1">{result.skipped} rows skipped (missing name or 1st preference).</p>
+          )}
+          {result.error && <p className="text-sm text-red-600 mt-1">{result.error}</p>}
+          <button onClick={onClose} className="mt-5 text-sm font-medium text-white bg-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-700">
+            Done
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AddApplicantForm({ onSubmit, departments }) {
   const [name, setName] = useState("");
   const [college, setCollege] = useState("");
-  const [department, setDepartment] = useState(DEPARTMENTS[0]);
+  const [pref1, setPref1] = useState(departments[0] || "");
+  const [pref2, setPref2] = useState("");
+  const [pref3, setPref3] = useState("");
+
+  const usedElsewhere = (value, exclude) => [pref1, pref2, pref3].filter((v, i) => v && v !== exclude).includes(value);
+
   return (
     <form onSubmit={(e) => {
       e.preventDefault();
       if (!name.trim()) return;
-      onSubmit({ name, college: college || "Not specified", department });
+      onSubmit({
+        name, college: college || "Not specified",
+        department: pref1,
+        preference2: pref2 || null,
+        preference3: pref3 || null,
+      });
     }}>
       <Field label="Full name">
         <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ishaan Bhatt" required />
@@ -1036,9 +1344,21 @@ function AddApplicantForm({ onSubmit }) {
       <Field label="College">
         <input className={inputClass} value={college} onChange={(e) => setCollege(e.target.value)} placeholder="e.g. SRCC" />
       </Field>
-      <Field label="Department applying for">
-        <select className={inputClass} value={department} onChange={(e) => setDepartment(e.target.value)}>
-          {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+      <Field label="1st preference (required)">
+        <select className={inputClass} value={pref1} onChange={(e) => setPref1(e.target.value)}>
+          {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </Field>
+      <Field label="2nd preference (optional)">
+        <select className={inputClass} value={pref2} onChange={(e) => setPref2(e.target.value)}>
+          <option value="">None</option>
+          {departments.filter((d) => !usedElsewhere(d, pref2) || d === pref2).map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </Field>
+      <Field label="3rd preference (optional)">
+        <select className={inputClass} value={pref3} onChange={(e) => setPref3(e.target.value)}>
+          <option value="">None</option>
+          {departments.filter((d) => !usedElsewhere(d, pref3) || d === pref3).map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
       </Field>
       <button type="submit" className="w-full bg-indigo-600 text-white text-sm font-medium py-2.5 rounded-lg hover:bg-indigo-700 mt-2">
@@ -1112,6 +1432,14 @@ function ApplicantDetailPage({ applicant, onBack, setStage, showToast, evaluatio
               <InfoRow icon={Clock} label="Year" value={applicant.year} />
               <InfoRow icon={MapPin} label="Location" value="New Delhi, India" />
             </div>
+            {(applicant.preference2 || applicant.preference3) && (
+              <div className="flex flex-wrap items-center gap-2 mt-5 pt-4 border-t border-gray-50">
+                <span className="text-xs text-gray-400">Department preferences:</span>
+                <span className="text-xs font-medium bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">1st: {applicant.department}</span>
+                {applicant.preference2 && <span className="text-xs font-medium bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">2nd: {applicant.preference2}</span>}
+                {applicant.preference3 && <span className="text-xs font-medium bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">3rd: {applicant.preference3}</span>}
+              </div>
+            )}
           </div>
 
           <div className="bg-white border border-gray-200 rounded-2xl p-6">
@@ -1218,10 +1546,14 @@ function InfoRow({ icon: Icon, label, value }) {
 
 const MONTH_INDEX = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
 function daysSince(dateStr) {
-  const [monthAbbr, dayNum] = dateStr.split(" ");
-  const d = new Date(2026, MONTH_INDEX[monthAbbr] ?? 7, Number(dayNum));
-  const now = new Date(2026, 7, 21); // Aug 21, 2026
-  return Math.max(0, Math.round((now - d) / 86400000));
+  if (!dateStr) return 0;
+  // dateStr arrives as an ISO date from the database, e.g. "2026-08-18"
+  const [year, month, day] = dateStr.split("-").map(Number);
+  if (!year || !month || !day) return 0;
+  const applied = new Date(year, month - 1, day);
+  const now = new Date();
+  const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.max(0, Math.round((nowMidnight - applied) / 86400000));
 }
 
 function PipelineCard({ applicant, onOpen, onDragStart }) {
@@ -1252,7 +1584,7 @@ function PipelineCard({ applicant, onOpen, onDragStart }) {
   );
 }
 
-function PipelinePage({ applicants, setStage, openApplicant, showToast }) {
+function PipelinePage({ applicants, setStage, openApplicant, showToast, departments }) {
   const [deptFilter, setDeptFilter] = useState("All departments");
   const [dragOverCol, setDragOverCol] = useState(null);
 
@@ -1279,7 +1611,7 @@ function PipelinePage({ applicants, setStage, openApplicant, showToast }) {
         </div>
         <select value={deptFilter} onChange={(e) => setDeptFilter(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option>All departments</option>
-          {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
+          {departments.map((d) => <option key={d}>{d}</option>)}
         </select>
       </div>
 
@@ -1681,9 +2013,9 @@ function EvaluationPage({ applicant, submitEvaluation, showToast, onBack }) {
    ANALYTICS
    ============================================================ */
 
-function AnalyticsPage({ applicants }) {
+function AnalyticsPage({ applicants, departments }) {
   const [range, setRange] = useState("Last 30 days");
-  const deptCounts = DEPARTMENTS.map((d) => ({ department: d, count: applicants.filter((a) => a.department === d).length }));
+  const deptCounts = departments.map((d) => ({ department: d, count: applicants.filter((a) => a.department === d).length }));
   const interviewerStats = [
     { name: "Ananya", interviews: 18, avg: 8.6, pending: 1 },
     { name: "Kabir", interviews: 15, avg: 8.1, pending: 0 },
@@ -1824,10 +2156,24 @@ function AnalyticsPage({ applicants }) {
    SETTINGS
    ============================================================ */
 
-function SettingsPage({ showToast }) {
+function SettingsPage({ showToast, society, updateSociety }) {
   const [allowEdit, setAllowEdit] = useState(true);
   const [autoReminders, setAutoReminders] = useState(true);
   const [requireScorecards, setRequireScorecards] = useState(false);
+  const [societyName, setSocietyName] = useState(society.name);
+  const [departments, setDepartments] = useState(society.departments);
+
+  const updateDept = (i, value) => setDepartments((prev) => prev.map((d, idx) => (idx === i ? value : d)));
+  const removeDept = (i) => setDepartments((prev) => prev.filter((_, idx) => idx !== i));
+  const addDept = () => setDepartments((prev) => [...prev, ""]);
+
+  const saveProfile = () => {
+    const cleanDepts = departments.map((d) => d.trim()).filter(Boolean);
+    if (!societyName.trim()) { showToast("Society name can't be empty."); return; }
+    if (cleanDepts.length === 0) { showToast("Add at least one department."); return; }
+    setDepartments(cleanDepts);
+    updateSociety({ name: societyName.trim(), departments: cleanDepts });
+  };
 
   return (
     <div className="p-4 md:p-8 max-w-3xl mx-auto space-y-5">
@@ -1838,9 +2184,9 @@ function SettingsPage({ showToast }) {
 
       <div className="bg-white border border-gray-200 rounded-2xl p-6">
         <h3 className="font-semibold text-gray-900 mb-4">Society Profile</h3>
-        <div className="grid sm:grid-cols-2 gap-4">
+        <div className="grid sm:grid-cols-2 gap-4 mb-2">
           <Field label="Society Name">
-            <input className={inputClass} defaultValue="SRCC Consulting Club" />
+            <input className={inputClass} value={societyName} onChange={(e) => setSocietyName(e.target.value)} />
           </Field>
           <Field label="Recruitment Cycle">
             <input className={inputClass} defaultValue="2026–27" />
@@ -1849,7 +2195,25 @@ function SettingsPage({ showToast }) {
             <input type="date" className={inputClass} defaultValue="2026-08-27" />
           </Field>
         </div>
-        <button onClick={() => showToast("Society profile saved")} className="text-sm font-medium text-white bg-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-700">
+
+        <div className="mb-4">
+          <span className="block text-sm font-medium text-gray-700 mb-1.5">Departments you recruit for</span>
+          <div className="space-y-2">
+            {departments.map((d, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input className={inputClass} value={d} onChange={(e) => updateDept(i, e.target.value)} placeholder={`Department ${i + 1}`} />
+                <button type="button" onClick={() => removeDept(i)} className="text-gray-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 shrink-0" aria-label="Remove department">
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={addDept} className="mt-2 text-sm font-medium text-indigo-600 hover:text-indigo-700 flex items-center gap-1">
+            <Plus size={14} /> Add another department
+          </button>
+        </div>
+
+        <button onClick={saveProfile} className="text-sm font-medium text-white bg-indigo-600 px-4 py-2 rounded-lg hover:bg-indigo-700">
           Save changes
         </button>
       </div>
@@ -1865,7 +2229,6 @@ function SettingsPage({ showToast }) {
         <h3 className="font-semibold text-gray-900 mb-4">Team Members</h3>
         <div className="space-y-3">
           {[
-            { name: "Aryan Sharma", role: "President" },
             { name: "You", role: "Recruitment Head" },
             ...INTERVIEWERS.map((i) => ({ name: i.name, role: "Interviewer" })),
           ].map((m) => (
@@ -1891,6 +2254,8 @@ export default function App() {
   const [stage, setStage] = useState("landing"); // landing | login | app
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [society, setSociety] = useState(null);
+  const [societyChecked, setSocietyChecked] = useState(false);
   const [view, setView] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [applicants, setApplicants] = useState([]);
@@ -1917,20 +2282,60 @@ export default function App() {
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
       if (newSession) setStage("app");
+      if (!newSession) { setSociety(null); setSocietyChecked(false); }
     });
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  // Once logged in, load real data from the database.
+  // Once logged in, find (or discover the absence of) this user's society.
   useEffect(() => {
     if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("societies")
+        .select("*")
+        .eq("owner_id", session.user.id)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) showToast("Could not load your society: " + error.message);
+      setSociety(data ? dbRowToSociety(data) : null);
+      setSocietyChecked(true);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const createSociety = async ({ name, departments }) => {
+    const { data, error } = await supabase
+      .from("societies")
+      .insert({ name, departments, owner_id: session.user.id })
+      .select()
+      .single();
+    if (error) { showToast("Could not create society: " + error.message); return; }
+    setSociety(dbRowToSociety(data));
+  };
+
+  const updateSociety = async (updates) => {
+    if (!society) return;
+    const payload = {};
+    if (updates.name !== undefined) payload.name = updates.name;
+    if (updates.departments !== undefined) payload.departments = updates.departments;
+    const { data, error } = await supabase.from("societies").update(payload).eq("id", society.id).select().single();
+    if (error) { showToast("Could not save changes: " + error.message); return; }
+    setSociety(dbRowToSociety(data));
+    showToast("Society settings saved");
+  };
+
+  // Once we know the society, load its real data from the database.
+  useEffect(() => {
+    if (!session || !society) return;
     let cancelled = false;
     setDataLoading(true);
     (async () => {
       const [applicantsRes, interviewsRes, evaluationsRes] = await Promise.all([
-        supabase.from("applicants").select("*").order("created_at", { ascending: false }),
-        supabase.from("interviews").select("*"),
-        supabase.from("evaluations").select("*"),
+        supabase.from("applicants").select("*").eq("society_id", society.id).order("created_at", { ascending: false }),
+        supabase.from("interviews").select("*").eq("society_id", society.id),
+        supabase.from("evaluations").select("*").eq("society_id", society.id),
       ]);
       if (cancelled) return;
       if (applicantsRes.error) showToast("Could not load applicants: " + applicantsRes.error.message);
@@ -1942,7 +2347,7 @@ export default function App() {
       setDataLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [session]);
+  }, [session, society]);
 
   const openApplicant = (id) => { setSelectedApplicantId(id); setView("applicant-detail"); };
   const goToEvaluation = (id) => { setSelectedApplicantId(id); setView("evaluation"); };
@@ -1954,7 +2359,7 @@ export default function App() {
     if (error) showToast("Failed to save stage change: " + error.message);
   };
 
-  const addApplicant = async ({ name, college, department }) => {
+  const addApplicant = async ({ name, college, department, preference2, preference3 }) => {
     const email = `${name.split(" ")[0].toLowerCase()}@college.edu`;
     const { data, error } = await supabase
       .from("applicants")
@@ -1962,12 +2367,30 @@ export default function App() {
         name, college, department, course: "B.A. (Hons.)", year: "1st Year",
         stage: "New", score: 0, email, phone: "+91 90000 00000",
         application_answers: [],
+        preference_2: preference2 || null,
+        preference_3: preference3 || null,
+        society_id: society.id,
         created_by: session?.user?.id || null,
       })
       .select()
       .single();
     if (error) { showToast("Failed to add applicant: " + error.message); return; }
     setApplicants((prev) => [dbRowToApplicant(data), ...prev]);
+  };
+
+  const bulkImportApplicants = async (rows) => {
+    const payload = rows.map((r) => ({
+      name: r.name, email: r.email || null, phone: r.phone || null,
+      college: r.college || null, course: r.course || null, year: r.year || null,
+      department: r.department, preference_2: r.preference2 || null, preference_3: r.preference3 || null,
+      stage: "New", score: 0, application_answers: [],
+      society_id: society.id,
+      created_by: session?.user?.id || null,
+    }));
+    const { data, error } = await supabase.from("applicants").insert(payload).select();
+    if (error) { showToast("Import failed: " + error.message); return { success: 0, error: error.message }; }
+    setApplicants((prev) => [...data.map(dbRowToApplicant), ...prev]);
+    return { success: data.length };
   };
 
   const addInterview = async (form) => {
@@ -1977,6 +2400,7 @@ export default function App() {
         applicant_id: form.applicantId, interviewer_id: form.interviewerId,
         date: form.date, time: form.time, duration: form.duration,
         type: form.type, status: form.status, meeting_link: form.meetingLink,
+        society_id: society.id,
         created_by: session?.user?.id || null,
       })
       .select()
@@ -1994,6 +2418,7 @@ export default function App() {
       creativity: formData.creativity, domain_knowledge: formData.domainKnowledge,
       culture_fit: formData.cultureFit, overall_score: formData.overallScore,
       recommendation: formData.recommendation, comments: formData.comments,
+      society_id: society.id,
       created_by: session?.user?.id || null,
     };
     const query = existing
@@ -2017,6 +2442,19 @@ export default function App() {
   if (!session && stage === "landing") return <LandingPage onDemo={() => setStage("login")} />;
   if (!session) return <LoginPage />;
 
+  if (!societyChecked) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-sm text-gray-400">Loading your workspace...</div>
+      </div>
+    );
+  }
+
+  if (!society) {
+    return <SocietyOnboarding onCreate={createSociety} userEmail={session.user.email} />;
+  }
+
+  const departments = society.departments;
   const selectedApplicant = applicants.find((a) => a.id === selectedApplicantId);
 
   const titles = {
@@ -2045,7 +2483,7 @@ export default function App() {
             <DashboardPage applicants={applicants} interviews={interviews} setView={setView} openApplicant={openApplicant} userEmail={session?.user?.email} />
           )}
           {view === "applicants" && (
-            <ApplicantsPage applicants={applicants} openApplicant={openApplicant} showToast={showToast} addApplicant={addApplicant} />
+            <ApplicantsPage applicants={applicants} openApplicant={openApplicant} showToast={showToast} addApplicant={addApplicant} bulkImportApplicants={bulkImportApplicants} departments={departments} />
           )}
           {view === "applicant-detail" && (
             <ApplicantDetailPage
@@ -2058,7 +2496,7 @@ export default function App() {
             />
           )}
           {view === "pipeline" && (
-            <PipelinePage applicants={applicants} setStage={setApplicantStage} openApplicant={openApplicant} showToast={showToast} />
+            <PipelinePage applicants={applicants} setStage={setApplicantStage} openApplicant={openApplicant} showToast={showToast} departments={departments} />
           )}
           {view === "scheduler" && (
             <SchedulerPage applicants={applicants} interviews={interviews} addInterview={addInterview} showToast={showToast} />
@@ -2069,8 +2507,8 @@ export default function App() {
           {view === "evaluation" && (
             <EvaluationPage applicant={selectedApplicant} submitEvaluation={submitEvaluation} showToast={showToast} onBack={() => setView("interviewer")} />
           )}
-          {view === "analytics" && <AnalyticsPage applicants={applicants} />}
-          {view === "settings" && <SettingsPage showToast={showToast} />}
+          {view === "analytics" && <AnalyticsPage applicants={applicants} departments={departments} />}
+          {view === "settings" && <SettingsPage showToast={showToast} society={society} updateSociety={updateSociety} />}
         </main>
       </div>
       <ToastStack toasts={toasts} />
