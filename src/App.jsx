@@ -1034,13 +1034,15 @@ function formatDateDisplay(dateStr) {
    APPLICANTS PAGE
    ============================================================ */
 
-function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bulkImportApplicants, departments }) {
+function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bulkImportApplicants, departments, deleteApplicants }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("All");
   const [deptFilter, setDeptFilter] = useState("All");
   const [page, setPage] = useState(1);
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [confirmDeleteIds, setConfirmDeleteIds] = useState(null); // array of ids, or null
   const perPage = 10;
 
   const filtered = useMemo(() => {
@@ -1054,6 +1056,36 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bu
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const pageItems = filtered.slice((page - 1) * perPage, page * perPage);
+
+  const allPageSelected = pageItems.length > 0 && pageItems.every((a) => selected.has(a.id));
+  const toggleAllOnPage = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageItems.forEach((a) => next.delete(a.id));
+      else pageItems.forEach((a) => next.add(a.id));
+      return next;
+    });
+  };
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleConfirmDelete = async () => {
+    const ids = confirmDeleteIds;
+    setConfirmDeleteIds(null);
+    await deleteApplicants(ids);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    showToast(`${ids.length} applicant${ids.length > 1 ? "s" : ""} deleted`);
+  };
 
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-5">
@@ -1102,11 +1134,37 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bu
         <span className="text-xs text-gray-400 ml-auto">{filtered.length} results</span>
       </div>
 
+      {selected.size > 0 && (
+        <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5 flex items-center justify-between">
+          <span className="text-sm text-indigo-900 font-medium">{selected.size} selected</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSelected(new Set())} className="text-sm font-medium text-indigo-700 px-3 py-1.5 rounded-lg hover:bg-indigo-100">
+              Clear
+            </button>
+            <button
+              onClick={() => setConfirmDeleteIds(Array.from(selected))}
+              className="flex items-center gap-1.5 text-sm font-medium text-white bg-red-600 px-3 py-1.5 rounded-lg hover:bg-red-700"
+            >
+              <Trash2 size={14} /> Delete selected
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 text-xs text-gray-500 uppercase tracking-wide">
+                <th className="text-left font-medium px-5 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={toggleAllOnPage}
+                    aria-label="Select all on this page"
+                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                </th>
                 <th className="text-left font-medium px-5 py-3">Applicant</th>
                 <th className="text-left font-medium px-5 py-3 hidden md:table-cell">College</th>
                 <th className="text-left font-medium px-5 py-3 hidden lg:table-cell">Applied For</th>
@@ -1119,12 +1177,21 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bu
             </thead>
             <tbody>
               {pageItems.length === 0 && (
-                <tr><td colSpan={8} className="text-center py-14 text-gray-400 text-sm">No applicants match your filters.</td></tr>
+                <tr><td colSpan={9} className="text-center py-14 text-gray-400 text-sm">No applicants match your filters.</td></tr>
               )}
               {pageItems.map((a) => {
                 const interviewer = INTERVIEWERS.find((i) => i.id === a.interviewerId);
                 return (
                   <tr key={a.id} onClick={() => openApplicant(a.id)} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors">
+                    <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(a.id)}
+                        onChange={() => toggleOne(a.id)}
+                        aria-label={`Select ${a.name}`}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-3">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-semibold shrink-0 ${avatarColor(a.name)}`}>
@@ -1142,8 +1209,14 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bu
                     <td className="px-5 py-3 font-medium text-gray-900 tabular-nums">{a.score.toFixed(1)}</td>
                     <td className="px-5 py-3 text-gray-500 hidden lg:table-cell">{interviewer ? interviewer.name.split(" ")[0] : "—"}</td>
                     <td className="px-5 py-3 text-gray-500 hidden md:table-cell">{formatDateDisplay(a.applicationDate)}</td>
-                    <td className="px-5 py-3 text-right">
-                      <MoreHorizontal size={16} className="text-gray-300" />
+                    <td className="px-5 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => setConfirmDeleteIds([a.id])}
+                        className="text-gray-300 hover:text-red-600 p-1 rounded hover:bg-red-50"
+                        aria-label={`Delete ${a.name}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </td>
                   </tr>
                 );
@@ -1178,6 +1251,18 @@ function ApplicantsPage({ applicants, openApplicant, showToast, addApplicant, bu
           onClose={() => setShowImport(false)}
           showToast={showToast}
         />
+      </Modal>
+
+      <Modal open={!!confirmDeleteIds} onClose={() => setConfirmDeleteIds(null)} title="Delete applicant(s)?">
+        <p className="text-sm text-gray-600 mb-6">
+          This will permanently delete <span className="font-medium text-gray-900">{confirmDeleteIds?.length}</span> applicant{confirmDeleteIds?.length > 1 ? "s" : ""}, along with any of their scheduled interviews and evaluations. This cannot be undone.
+        </p>
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => setConfirmDeleteIds(null)} className="text-sm font-medium text-gray-600 px-4 py-2 rounded-lg hover:bg-gray-50">Cancel</button>
+          <button onClick={handleConfirmDelete} className="text-sm font-medium text-white bg-red-600 px-4 py-2 rounded-lg hover:bg-red-700">
+            Delete permanently
+          </button>
+        </div>
       </Modal>
     </div>
   );
@@ -1391,8 +1476,9 @@ function AddApplicantForm({ onSubmit, departments }) {
    APPLICANT DETAIL
    ============================================================ */
 
-function ApplicantDetailPage({ applicant, onBack, setStage, showToast, evaluations, goToSchedule }) {
+function ApplicantDetailPage({ applicant, onBack, setStage, showToast, evaluations, goToSchedule, deleteApplicants }) {
   const [confirmReject, setConfirmReject] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   if (!applicant) return null;
   const evalRecord = evaluations.find((e) => e.applicantId === applicant.id);
   const timelineSteps = ["Application submitted", "Screened", "Shortlisted", "Interview scheduled", "Interview completed"];
@@ -1433,6 +1519,9 @@ function ApplicantDetailPage({ applicant, onBack, setStage, showToast, evaluatio
               </button>
               <button onClick={() => setConfirmReject(true)} className="text-sm font-medium text-red-600 border border-red-200 px-3.5 py-2 rounded-lg hover:bg-red-50 whitespace-nowrap">
                 Reject
+              </button>
+              <button onClick={() => setConfirmDelete(true)} className="text-sm font-medium text-gray-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50" aria-label="Delete applicant">
+                <Trash2 size={16} />
               </button>
             </div>
           </div>
@@ -1540,6 +1629,21 @@ function ApplicantDetailPage({ applicant, onBack, setStage, showToast, evaluatio
             className="text-sm font-medium text-white bg-red-600 px-4 py-2 rounded-lg hover:bg-red-700"
           >
             Reject candidate
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete applicant?">
+        <p className="text-sm text-gray-600 mb-6">
+          This will permanently delete <span className="font-medium text-gray-900">{applicant.name}</span>, along with any scheduled interviews and evaluations for them. This cannot be undone.
+        </p>
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => setConfirmDelete(false)} className="text-sm font-medium text-gray-600 px-4 py-2 rounded-lg hover:bg-gray-50">Cancel</button>
+          <button
+            onClick={async () => { await deleteApplicants([applicant.id]); showToast(`${applicant.name} was deleted`); setConfirmDelete(false); }}
+            className="text-sm font-medium text-white bg-red-600 px-4 py-2 rounded-lg hover:bg-red-700"
+          >
+            Delete permanently
           </button>
         </div>
       </Modal>
@@ -2412,6 +2516,20 @@ export default function App() {
     return { success: data.length };
   };
 
+  const deleteApplicants = async (ids) => {
+    const { error } = await supabase.from("applicants").delete().in("id", ids);
+    if (error) { showToast("Failed to delete: " + error.message); return; }
+    setApplicants((prev) => prev.filter((a) => !ids.includes(a.id)));
+    // Interviews/evaluations are removed server-side via ON DELETE CASCADE;
+    // clear them from local state too so the UI reflects it immediately.
+    setInterviews((prev) => prev.filter((iv) => !ids.includes(iv.applicantId)));
+    setEvaluations((prev) => prev.filter((e) => !ids.includes(e.applicantId)));
+    if (selectedApplicantId && ids.includes(selectedApplicantId)) {
+      setSelectedApplicantId(null);
+      setView("applicants");
+    }
+  };
+
   const addInterview = async (form) => {
     const { data, error } = await supabase
       .from("interviews")
@@ -2502,7 +2620,7 @@ export default function App() {
             <DashboardPage applicants={applicants} interviews={interviews} setView={setView} openApplicant={openApplicant} userEmail={session?.user?.email} />
           )}
           {view === "applicants" && (
-            <ApplicantsPage applicants={applicants} openApplicant={openApplicant} showToast={showToast} addApplicant={addApplicant} bulkImportApplicants={bulkImportApplicants} departments={departments} />
+            <ApplicantsPage applicants={applicants} openApplicant={openApplicant} showToast={showToast} addApplicant={addApplicant} bulkImportApplicants={bulkImportApplicants} departments={departments} deleteApplicants={deleteApplicants} />
           )}
           {view === "applicant-detail" && (
             <ApplicantDetailPage
@@ -2512,6 +2630,7 @@ export default function App() {
               showToast={showToast}
               evaluations={evaluations}
               goToSchedule={goToSchedule}
+              deleteApplicants={deleteApplicants}
             />
           )}
           {view === "pipeline" && (
